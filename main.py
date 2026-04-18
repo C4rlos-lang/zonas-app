@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client
@@ -18,7 +18,12 @@ app.add_middleware(
 
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 
-# --- Modelos ---
+API_KEY = os.getenv("API_KEY")
+
+def verificar_api_key(x_api_key: str = Header(None)):
+    if API_KEY and x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="API Key invalida")
+
 class Zona(BaseModel):
     nombre: str
     coordenadas: list
@@ -27,7 +32,6 @@ class Punto(BaseModel):
     lat: float
     lon: float
 
-# --- Utilidad: punto en polígono (ray casting) ---
 def punto_en_poligono(punto, poligono):
     lat, lon = punto
     dentro = False
@@ -41,9 +45,9 @@ def punto_en_poligono(punto, poligono):
         j = i
     return dentro
 
-# --- Endpoints ---
 @app.post("/zonas")
-def crear_zona(zona: Zona):
+def crear_zona(zona: Zona, x_api_key: str = Header(None)):
+    verificar_api_key(x_api_key)
     res = supabase.table("zonas").insert({
         "nombre": zona.nombre,
         "coordenadas": zona.coordenadas
@@ -56,7 +60,8 @@ def listar_zonas():
     return res.data
 
 @app.delete("/zonas/{id}")
-def eliminar_zona(id: str):
+def eliminar_zona(id: str, x_api_key: str = Header(None)):
+    verificar_api_key(x_api_key)
     supabase.table("zonas").delete().eq("id", id).execute()
     return {"mensaje": "Zona eliminada"}
 
