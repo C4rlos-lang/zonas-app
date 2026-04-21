@@ -71,6 +71,8 @@ def verificar_admin(x_api_key: str = Header(None)):
 def verificar_cliente_key(x_api_key: str = Header(None)):
     if not x_api_key:
         raise HTTPException(status_code=401, detail="API Key requerida")
+    if x_api_key == ADMIN_KEY:
+        return {"id": "admin", "api_key": ADMIN_KEY, "es_admin": True}
     res = supabase.table("gz_api_keys").select("*, gz_clientes(*)").eq("api_key", x_api_key).eq("activa", True).execute()
     if not res.data:
         raise HTTPException(status_code=401, detail="API Key invalida o inactiva")
@@ -104,10 +106,11 @@ def eliminar_zona(id: str, x_api_key: str = Header(None)):
 @app.post("/zonas/verificar", tags=["Verificacion"])
 def verificar_punto(punto: Punto, x_api_key: str = Header(None)):
     key_data = verificar_cliente_key(x_api_key)
-    supabase.table("gz_consumo_log").insert({
-        "api_key_id": key_data["id"],
-        "endpoint": "/zonas/verificar"
-    }).execute()
+    if not key_data.get("es_admin"):
+        supabase.table("gz_consumo_log").insert({
+            "api_key_id": key_data["id"],
+            "endpoint": "/zonas/verificar"
+        }).execute()
     res = supabase.table("zonas").select("*").execute()
     zonas = res.data
     encontradas = []
