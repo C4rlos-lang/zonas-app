@@ -327,7 +327,7 @@ async def webhook_wompi(request: Request):
 def verificar_pago(referencia: str, authorization: str = Header(None)):
     user = obtener_usuario(authorization)
     try:
-        url = "https://sandbox.wompi.co/v1/transactions?reference=" + referencia
+        url = "https://production.wompi.co/v1/transactions?reference=" + referencia
         headers = {"Authorization": "Bearer " + WOMPI_PRIVATE_KEY}
         resp = http_requests.get(url, headers=headers)
         data = resp.json()
