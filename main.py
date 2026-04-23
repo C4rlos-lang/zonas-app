@@ -286,7 +286,7 @@ def crear_pago(datos: CrearTransaccion, authorization: str = Header(None)):
         raise HTTPException(status_code=400, detail="Este plan es gratuito")
     precio_centavos = plan.data[0]["precio"] * 100
     referencia = "gz_" + secrets.token_hex(12)
-    integrity_str = referencia + str(precio_centavos) + "COP" + WOMPI_PRIVATE_KEY
+    integrity_str = referencia + str(precio_centavos) + "COP" + os.getenv("WOMPI_INTEGRITY_SECRET", "")
     integrity_hash = hashlib.sha256(integrity_str.encode()).hexdigest()
     return {
         "public_key": WOMPI_PUBLIC_KEY,
