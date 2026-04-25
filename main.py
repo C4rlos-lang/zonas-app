@@ -341,9 +341,16 @@ def verificar_pago(referencia: str, authorization: str = Header(None)):
             if estado == "APPROVED":
                 cliente = supabase.table("gz_clientes").select("*").eq("user_id", user.id).execute()
                 if cliente.data:
+                    plan_nombre = "business"
+                    plan = supabase.table("gz_planes").select("*").eq("nombre", plan_nombre).execute()
+                    if plan.data:
+                        supabase.table("gz_clientes").update({
+                            "plan": plan_nombre,
+                            "consultas_restantes": plan.data[0]["consultas_mes"]
+                        }).eq("id", cliente.data[0]["id"]).execute()
                     return {
                         "estado": "APPROVED",
-                        "plan": cliente.data[0].get("plan", "starter")
+                        "plan": plan_nombre
                     }
             return {"estado": estado}
         return {"estado": "NOT_FOUND"}
