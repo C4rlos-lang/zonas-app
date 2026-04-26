@@ -356,7 +356,7 @@ def verificar_pago(referencia: str, authorization: str = Header(None)):
         return {"estado": "NOT_FOUND"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+        
 # --- Endpoints ADMIN (gestion de clientes) ---
 @app.get("/admin/clientes", tags=["Admin"])
 def listar_clientes(x_api_key: str = Header(None)):
