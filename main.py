@@ -166,13 +166,13 @@ def eliminar_zona(id: str, x_api_key: str = Header(None)):
 def verificar_punto(punto: Punto, x_api_key: str = Header(None)):
     global CONSUMO_BUFFER
     key_data = verificar_cliente_key(x_api_key)
-    if not key_data.get("es_admin"):
-        CONSUMO_BUFFER.append({
-            "api_key_id": key_data["id"],
-            "endpoint": "/zonas/verificar"
-        })
-        if len(CONSUMO_BUFFER) >= 50:
-            flush_consumo()
+    #if not key_data.get("es_admin"):
+    #    CONSUMO_BUFFER.append({
+    #        "api_key_id": key_data["id"],
+    #        "endpoint": "/zonas/verificar"
+    #    })
+    #    if len(CONSUMO_BUFFER) >= 50:
+    #        flush_consumo()
     if not CACHE_CARGADO:
         cargar_cache()
     encontradas = []
