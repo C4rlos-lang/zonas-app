@@ -7,6 +7,7 @@ import os
 import secrets
 import requests as http_requests
 import hashlib
+import time
 
 load_dotenv()
 
@@ -28,9 +29,12 @@ ADMIN_KEY = os.getenv("API_KEY")
 WOMPI_PUBLIC_KEY = os.getenv("WOMPI_PUBLIC_KEY")
 WOMPI_PRIVATE_KEY = os.getenv("WOMPI_PRIVATE_KEY")
 
-# --- Caché de zonas en memoria ---
+# --- Caché en memoria ---
 ZONAS_CACHE = []
 CACHE_CARGADO = False
+API_KEYS_CACHE = {}
+CACHE_KEYS_TIME = 0
+CONSUMO_BUFFER = []
 
 def cargar_cache():
     global ZONAS_CACHE, CACHE_CARGADO
@@ -42,6 +46,25 @@ def cargar_cache():
 def invalidar_cache():
     global CACHE_CARGADO
     CACHE_CARGADO = False
+
+def cargar_keys_cache():
+    global API_KEYS_CACHE, CACHE_KEYS_TIME
+    res = supabase.table("gz_api_keys").select("*, gz_clientes(*)").eq("activa", True).execute()
+    API_KEYS_CACHE = {}
+    for k in res.data:
+        API_KEYS_CACHE[k["api_key"]] = k
+    CACHE_KEYS_TIME = time.time()
+    print(f"CACHE: {len(API_KEYS_CACHE)} API keys cargadas")
+
+def flush_consumo():
+    global CONSUMO_BUFFER
+    if not CONSUMO_BUFFER:
+        return
+    try:
+        supabase.table("gz_consumo_log").insert(CONSUMO_BUFFER).execute()
+    except Exception:
+        pass
+    CONSUMO_BUFFER = []
 
 # --- Modelos ---
 class Zona(BaseModel):
@@ -90,20 +113,20 @@ def verificar_admin(x_api_key: str = Header(None)):
         raise HTTPException(status_code=401, detail="Admin API Key invalida")
 
 def verificar_cliente_key(x_api_key: str = Header(None)):
+    global CACHE_KEYS_TIME
     if not x_api_key:
         raise HTTPException(status_code=401, detail="API Key requerida")
     if x_api_key == ADMIN_KEY:
         return {"id": "admin", "api_key": ADMIN_KEY, "es_admin": True}
-    res = supabase.table("gz_api_keys").select("*, gz_clientes(*)").eq("api_key", x_api_key).eq("activa", True).execute()
-    if not res.data:
+    if not API_KEYS_CACHE or (time.time() - CACHE_KEYS_TIME) > 300:
+        cargar_keys_cache()
+    key_data = API_KEYS_CACHE.get(x_api_key)
+    if not key_data:
         raise HTTPException(status_code=401, detail="API Key invalida o inactiva")
-    cliente = res.data[0].get("gz_clientes", {})
+    cliente = key_data.get("gz_clientes", {})
     if not cliente.get("activo", False):
         raise HTTPException(status_code=403, detail="Cuenta desactivada")
-    consultas = cliente.get("consultas_restantes", 0)
-    if consultas <= 0 and cliente.get("plan", "starter") != "enterprise":
-        raise HTTPException(status_code=429, detail="Limite de consultas alcanzado. Actualiza tu plan.")
-    return res.data[0]
+    return key_data
 
 def obtener_usuario(authorization):
     if not authorization:
@@ -141,19 +164,15 @@ def eliminar_zona(id: str, x_api_key: str = Header(None)):
 # --- Endpoint de VERIFICACION (clientes) ---
 @app.post("/zonas/verificar", tags=["Verificacion"])
 def verificar_punto(punto: Punto, x_api_key: str = Header(None)):
-    global CACHE_CARGADO
+    global CONSUMO_BUFFER
     key_data = verificar_cliente_key(x_api_key)
     if not key_data.get("es_admin"):
-        supabase.table("gz_consumo_log").insert({
+        CONSUMO_BUFFER.append({
             "api_key_id": key_data["id"],
             "endpoint": "/zonas/verificar"
-        }).execute()
-        cliente = key_data.get("gz_clientes", {})
-        if cliente and cliente.get("plan", "starter") != "enterprise":
-            nuevas = max(0, cliente.get("consultas_restantes", 0) - 1)
-            supabase.table("gz_clientes").update({
-                "consultas_restantes": nuevas
-            }).eq("id", cliente["id"]).execute()
+        })
+        if len(CONSUMO_BUFFER) >= 50:
+            flush_consumo()
     if not CACHE_CARGADO:
         cargar_cache()
     encontradas = []
@@ -189,6 +208,8 @@ def registro_cliente(datos: ClienteRegistro):
             "api_key": primera_key,
             "nombre": "default"
         }).execute()
+        invalidar_cache()
+        cargar_keys_cache()
         return {
             "mensaje": "Registro exitoso",
             "cliente": cliente.data[0],
@@ -240,6 +261,7 @@ def crear_api_key(datos: ApiKeyCrear, authorization: str = Header(None)):
         "api_key": nueva_key,
         "nombre": datos.nombre
     }).execute()
+    cargar_keys_cache()
     return res.data[0]
 
 @app.get("/mis-keys", tags=["API Keys"])
@@ -258,6 +280,7 @@ def revocar_api_key(id: str, authorization: str = Header(None)):
     if not cliente.data:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
     supabase.table("gz_api_keys").delete().eq("id", id).eq("cliente_id", cliente.data[0]["id"]).execute()
+    cargar_keys_cache()
     return {"mensaje": "API Key revocada"}
 
 # --- Endpoint de CONSUMO (clientes) ---
@@ -307,9 +330,6 @@ def crear_pago(datos: CrearTransaccion, authorization: str = Header(None)):
     integrity_secret = os.getenv("WOMPI_INTEGRITY_SECRET", "")
     integrity_str = f"{referencia}{precio_centavos}COP{integrity_secret}"
     integrity_hash = hashlib.sha256(integrity_str.encode('utf-8')).hexdigest()
-    print("DEBUG integrity_str:", integrity_str)
-    print("DEBUG integrity_hash:", integrity_hash)
-    print("DEBUG secret length:", len(integrity_secret))
     return {
         "public_key": WOMPI_PUBLIC_KEY,
         "monto": precio_centavos,
@@ -330,7 +350,7 @@ async def webhook_wompi(request: Request):
         referencia = data.get("reference", "")
         estado = data.get("status", "")
         if evento == "transaction.updated" and estado == "APPROVED":
-            if referencia.startswith("gz_"):
+            if referencia.startswith("gz"):
                 meta = data.get("metadata", {})
                 cliente_id = meta.get("cliente_id", "")
                 plan_nombre = meta.get("plan", "")
@@ -374,7 +394,7 @@ def verificar_pago(referencia: str, authorization: str = Header(None)):
         return {"estado": "NOT_FOUND"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-        
+
 # --- Endpoints ADMIN (gestion de clientes) ---
 @app.get("/admin/clientes", tags=["Admin"])
 def listar_clientes(x_api_key: str = Header(None)):
@@ -391,3 +411,8 @@ def toggle_cliente(id: str, x_api_key: str = Header(None)):
     nuevo_estado = not cliente.data[0]["activo"]
     supabase.table("gz_clientes").update({"activo": nuevo_estado}).eq("id", id).execute()
     return {"activo": nuevo_estado}
+
+# --- Evento de cierre: flush consumo pendiente ---
+@app.on_event("shutdown")
+def shutdown_event():
+    flush_consumo()
