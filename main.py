@@ -28,6 +28,21 @@ ADMIN_KEY = os.getenv("API_KEY")
 WOMPI_PUBLIC_KEY = os.getenv("WOMPI_PUBLIC_KEY")
 WOMPI_PRIVATE_KEY = os.getenv("WOMPI_PRIVATE_KEY")
 
+# --- Caché de zonas en memoria ---
+ZONAS_CACHE = []
+CACHE_CARGADO = False
+
+def cargar_cache():
+    global ZONAS_CACHE, CACHE_CARGADO
+    res = supabase.table("zonas").select("*").execute()
+    ZONAS_CACHE = res.data
+    CACHE_CARGADO = True
+    print(f"CACHE: {len(ZONAS_CACHE)} zonas cargadas en memoria")
+
+def invalidar_cache():
+    global CACHE_CARGADO
+    CACHE_CARGADO = False
+
 # --- Modelos ---
 class Zona(BaseModel):
     nombre: str
@@ -108,6 +123,7 @@ def crear_zona(zona: Zona, x_api_key: str = Header(None)):
         "nombre": zona.nombre,
         "coordenadas": zona.coordenadas
     }).execute()
+    invalidar_cache()
     return res.data[0]
 
 @app.get("/zonas", tags=["Zonas - Admin"])
@@ -119,11 +135,13 @@ def listar_zonas():
 def eliminar_zona(id: str, x_api_key: str = Header(None)):
     verificar_admin(x_api_key)
     supabase.table("zonas").delete().eq("id", id).execute()
+    invalidar_cache()
     return {"mensaje": "Zona eliminada"}
 
 # --- Endpoint de VERIFICACION (clientes) ---
 @app.post("/zonas/verificar", tags=["Verificacion"])
 def verificar_punto(punto: Punto, x_api_key: str = Header(None)):
+    global CACHE_CARGADO
     key_data = verificar_cliente_key(x_api_key)
     if not key_data.get("es_admin"):
         supabase.table("gz_consumo_log").insert({
@@ -136,10 +154,10 @@ def verificar_punto(punto: Punto, x_api_key: str = Header(None)):
             supabase.table("gz_clientes").update({
                 "consultas_restantes": nuevas
             }).eq("id", cliente["id"]).execute()
-    res = supabase.table("zonas").select("*").execute()
-    zonas = res.data
+    if not CACHE_CARGADO:
+        cargar_cache()
     encontradas = []
-    for zona in zonas:
+    for zona in ZONAS_CACHE:
         coords = zona["coordenadas"]
         if punto_en_poligono([punto.lat, punto.lon], coords):
             encontradas.append({"id": zona["id"], "nombre": zona["nombre"]})
