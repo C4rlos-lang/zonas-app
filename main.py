@@ -91,6 +91,9 @@ class ApiKeyCrear(BaseModel):
 class CrearTransaccion(BaseModel):
     plan: str
 
+class PuntosMasivos(BaseModel):
+    puntos: list
+
 # --- Utilidades ---
 def punto_en_poligono(punto, poligono):
     lat, lon = punto
@@ -183,6 +186,35 @@ def verificar_punto(punto: Punto, x_api_key: str = Header(None)):
     if not encontradas:
         return {"zona": None, "mensaje": "El punto no pertenece a ninguna zona"}
     return {"zona": encontradas[0]["nombre"], "todas": encontradas}
+
+@app.post("/zonas/verificar-masivo", tags=["Verificacion"])
+def verificar_masivo(datos: PuntosMasivos, x_api_key: str = Header(None)):
+    global CONSUMO_BUFFER
+    key_data = verificar_cliente_key(x_api_key)
+    if not CACHE_CARGADO:
+        cargar_cache()
+    resultados = []
+    for punto in datos.puntos:
+        lat = punto.get("lat", 0)
+        lon = punto.get("lon", 0)
+        encontradas = []
+        for zona in ZONAS_CACHE:
+            coords = zona["coordenadas"]
+            if punto_en_poligono([lat, lon], coords):
+                encontradas.append({"id": zona["id"], "nombre": zona["nombre"]})
+        if encontradas:
+            resultados.append({"lat": lat, "lon": lon, "zona": encontradas[0]["nombre"]})
+        else:
+            resultados.append({"lat": lat, "lon": lon, "zona": None})
+    if not key_data.get("es_admin"):
+        CONSUMO_BUFFER.append({
+            "api_key_id": key_data["id"],
+            "endpoint": "/zonas/verificar-masivo",
+        })
+        if len(CONSUMO_BUFFER) >= 50:
+            flush_consumo()
+    return {"total": len(resultados), "resultados": resultados}
+
 
 # --- Endpoints de REGISTRO/LOGIN (clientes) ---
 @app.post("/auth/registro", tags=["Autenticacion"])
