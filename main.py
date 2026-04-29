@@ -97,6 +97,10 @@ class ApiKeyCrear(BaseModel):
 class CrearTransaccion(BaseModel):
     plan: str
 
+class CambiarPassword(BaseModel):
+    access_token: str
+    new_password: str
+
 # --- Utilidades ---
 def punto_en_poligono(punto, poligono):
     lat, lon = punto
@@ -461,3 +465,14 @@ def toggle_cliente(id: str, x_api_key: str = Header(None)):
 @app.on_event("shutdown")
 def shutdown_event():
     flush_consumo()
+
+@app.post("/auth/cambiar-password", tags=["Autenticacion"])
+def cambiar_password(datos: CambiarPassword):
+    try:
+        supabase.auth.admin.update_user_by_id(
+            supabase.auth.get_user(datos.access_token).user.id,
+            {"password": datos.new_password}
+        )
+        return {"mensaje": "Contrasena actualizada exitosamente"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
