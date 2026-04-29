@@ -29,7 +29,7 @@ ADMIN_KEY = os.getenv("API_KEY")
 WOMPI_PUBLIC_KEY = os.getenv("WOMPI_PUBLIC_KEY")
 WOMPI_PRIVATE_KEY = os.getenv("WOMPI_PRIVATE_KEY")
 
-# --- Caché en memoria ---
+# --- Cache en memoria ---
 ZONAS_CACHE = []
 CACHE_CARGADO = False
 API_KEYS_CACHE = {}
@@ -75,6 +75,9 @@ class Punto(BaseModel):
     lat: float
     lon: float
 
+class PuntosMasivos(BaseModel):
+    puntos: list
+
 class ClienteRegistro(BaseModel):
     nombre: str
     empresa: str
@@ -85,17 +88,14 @@ class ClienteLogin(BaseModel):
     email: str
     password: str
 
+class RecuperarPassword(BaseModel):
+    email: str
+
 class ApiKeyCrear(BaseModel):
     nombre: str = "default"
 
 class CrearTransaccion(BaseModel):
     plan: str
-
-class PuntosMasivos(BaseModel):
-    puntos: list
-
-class RecuperarPassword(BaseModel):
-    email: str
 
 # --- Utilidades ---
 def punto_en_poligono(punto, poligono):
@@ -172,13 +172,13 @@ def eliminar_zona(id: str, x_api_key: str = Header(None)):
 def verificar_punto(punto: Punto, x_api_key: str = Header(None)):
     global CONSUMO_BUFFER
     key_data = verificar_cliente_key(x_api_key)
-    #if not key_data.get("es_admin"):
-    #    CONSUMO_BUFFER.append({
-    #        "api_key_id": key_data["id"],
-    #        "endpoint": "/zonas/verificar"
-    #    })
-    #    if len(CONSUMO_BUFFER) >= 50:
-    #        flush_consumo()
+    if not key_data.get("es_admin"):
+        CONSUMO_BUFFER.append({
+            "api_key_id": key_data["id"],
+            "endpoint": "/zonas/verificar"
+        })
+        if len(CONSUMO_BUFFER) >= 50:
+            flush_consumo()
     if not CACHE_CARGADO:
         cargar_cache()
     encontradas = []
@@ -190,6 +190,7 @@ def verificar_punto(punto: Punto, x_api_key: str = Header(None)):
         return {"zona": None, "mensaje": "El punto no pertenece a ninguna zona"}
     return {"zona": encontradas[0]["nombre"], "todas": encontradas}
 
+# --- Endpoint de VERIFICACION MASIVA (clientes) ---
 @app.post("/zonas/verificar-masivo", tags=["Verificacion"])
 def verificar_masivo(datos: PuntosMasivos, x_api_key: str = Header(None)):
     global CONSUMO_BUFFER
@@ -217,7 +218,6 @@ def verificar_masivo(datos: PuntosMasivos, x_api_key: str = Header(None)):
         if len(CONSUMO_BUFFER) >= 50:
             flush_consumo()
     return {"total": len(resultados), "resultados": resultados}
-
 
 # --- Endpoints de REGISTRO/LOGIN (clientes) ---
 @app.post("/auth/registro", tags=["Autenticacion"])
@@ -281,9 +281,9 @@ def recuperar_password(datos: RecuperarPassword):
         supabase.auth.reset_password_email(datos.email, {
             "redirect_to": "https://zonas-frontend.vercel.app/#/portal"
         })
-        return {"mensaje": "Si el correo existe, recibiras un enlace para restablecer tu contraseña"}
+        return {"mensaje": "Si el correo existe, recibiras un enlace para restablecer tu contrasena"}
     except Exception as e:
-        return {"mensaje": "Si el correo existe, recibiras un enlace para restablecer tu contraseña"}
+        return {"mensaje": "Si el correo existe, recibiras un enlace para restablecer tu contrasena"}
 
 # --- Endpoints de API KEYS (clientes autenticados) ---
 @app.post("/mis-keys", tags=["API Keys"])
