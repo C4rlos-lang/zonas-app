@@ -469,10 +469,10 @@ def shutdown_event():
 @app.post("/auth/cambiar-password", tags=["Autenticacion"])
 def cambiar_password(datos: CambiarPassword):
     try:
-        supabase.auth.admin.update_user_by_id(
-            supabase.auth.get_user(datos.access_token).user.id,
-            {"password": datos.new_password}
-        )
+        from supabase import create_client as sc
+        admin_client = sc(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
+        user = supabase.auth.get_user(datos.access_token)
+        admin_client.auth.admin.update_user_by_id(user.user.id, {"password": datos.new_password})
         return {"mensaje": "Contrasena actualizada exitosamente"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
