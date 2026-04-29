@@ -275,6 +275,16 @@ def login_cliente(datos: ClienteLogin):
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
 
+@app.post("/auth/recuperar", tags=["Autenticacion"])
+def recuperar_password(datos: RecuperarPassword):
+    try:
+        supabase.auth.reset_password_email(datos.email, {
+            "redirect_to": "https://zonas-frontend.vercel.app/#/portal"
+        })
+        return {"mensaje": "Si el correo existe, recibiras un enlace para restablecer tu contraseña"}
+    except Exception as e:
+        return {"mensaje": "Si el correo existe, recibiras un enlace para restablecer tu contraseña"}
+
 # --- Endpoints de API KEYS (clientes autenticados) ---
 @app.post("/mis-keys", tags=["API Keys"])
 def crear_api_key(datos: ApiKeyCrear, authorization: str = Header(None)):
