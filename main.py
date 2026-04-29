@@ -94,6 +94,9 @@ class CrearTransaccion(BaseModel):
 class PuntosMasivos(BaseModel):
     puntos: list
 
+class RecuperarPassword(BaseModel):
+    email: str
+
 # --- Utilidades ---
 def punto_en_poligono(punto, poligono):
     lat, lon = punto
