@@ -283,7 +283,7 @@ def login_cliente(datos: ClienteLogin):
 def recuperar_password(datos: RecuperarPassword):
     try:
         supabase.auth.reset_password_email(datos.email, {
-            "redirect_to": "https://zonas-frontend.vercel.app/#/portal"
+            "redirect_to": "https://zonas-frontend.vercel.app/#/portal/reset"
         })
         return {"mensaje": "Si el correo existe, recibiras un enlace para restablecer tu contrasena"}
     except Exception as e:
