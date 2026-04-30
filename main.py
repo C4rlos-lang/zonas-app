@@ -101,6 +101,9 @@ class CambiarPassword(BaseModel):
     access_token: str
     new_password: str
 
+class ZonaEditar(BaseModel):
+    nombre: str
+
 # --- Utilidades ---
 def punto_en_poligono(punto, poligono):
     lat, lon = punto
