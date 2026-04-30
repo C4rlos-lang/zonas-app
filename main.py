@@ -414,7 +414,7 @@ async def webhook_wompi(request: Request):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-@app.get("/pagos/verificar/{referencia}", tags=["Pagos"])
+@app.get("/pagos/verificar/{referencia}", tags=["Pagos"], include_in_schema=False)
 def verificar_pago(referencia: str, authorization: str = Header(None)):
     user = obtener_usuario(authorization)
     try:
@@ -445,13 +445,13 @@ def verificar_pago(referencia: str, authorization: str = Header(None)):
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- Endpoints ADMIN (gestion de clientes) ---
-@app.get("/admin/clientes", tags=["Admin"])
+@app.get("/admin/clientes", tags=["Admin"], include_in_schema=False)
 def listar_clientes(x_api_key: str = Header(None)):
     verificar_admin(x_api_key)
     res = supabase.table("gz_clientes").select("*").execute()
     return res.data
 
-@app.put("/admin/clientes/{id}/toggle", tags=["Admin"])
+@app.put("/admin/clientes/{id}/toggle", tags=["Admin"], include_in_schema=False)
 def toggle_cliente(id: str, x_api_key: str = Header(None)):
     verificar_admin(x_api_key)
     cliente = supabase.table("gz_clientes").select("*").eq("id", id).execute()
@@ -466,7 +466,7 @@ def toggle_cliente(id: str, x_api_key: str = Header(None)):
 def shutdown_event():
     flush_consumo()
 
-@app.post("/auth/cambiar-password", tags=["Autenticacion"])
+@app.post("/auth/cambiar-password", tags=["Autenticacion"], include_in_schema=False)
 def cambiar_password(datos: CambiarPassword):
     try:
         from supabase import create_client as sc
