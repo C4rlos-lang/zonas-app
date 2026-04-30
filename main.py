@@ -363,7 +363,7 @@ def ver_plan(authorization: str = Header(None)):
     }
 
 # --- Endpoints de PAGO con Wompi ---
-@app.post("/pagos/crear", tags=["Pagos"])
+@app.post("/pagos/crear", tags=["Pagos"], include_in_schema=False)
 def crear_pago(datos: CrearTransaccion, authorization: str = Header(None)):
     user = obtener_usuario(authorization)
     cliente = supabase.table("gz_clientes").select("*").eq("user_id", user.id).execute()
@@ -390,7 +390,7 @@ def crear_pago(datos: CrearTransaccion, authorization: str = Header(None)):
         "redirect_url": "https://zonas-frontend.vercel.app/#/portal/dashboard"
     }
 
-@app.post("/pagos/webhook", tags=["Pagos"])
+@app.post("/pagos/webhook", tags=["Pagos"], include_in_schema=False)
 async def webhook_wompi(request: Request):
     body = await request.json()
     try:
