@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from supabase import create_client
 from dotenv import load_dotenv
@@ -78,25 +77,22 @@ def flush_metricas():
         pass
     METRICAS_BUFFER = []
 
-# --- Middleware de metricas ---
-class MetricasMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        global METRICAS_BUFFER
-        inicio = time.time()
-        response = await call_next(request)
-        duracion = (time.time() - inicio) * 1000
-        if request.method != "OPTIONS":
-            METRICAS_BUFFER.append({
-                "endpoint": request.url.path,
-                "metodo": request.method,
-                "status_code": response.status_code,
-                "tiempo_ms": round(duracion, 2)
-            })
-            if len(METRICAS_BUFFER) >= 20:
-                flush_metricas()
-        return response
-
-app.add_middleware(MetricasMiddleware)
+@app.middleware("http")
+async def metricas_middleware(request: Request, call_next):
+    global METRICAS_BUFFER
+    inicio = time.time()
+    response = await call_next(request)
+    duracion = (time.time() - inicio) * 1000
+    if request.method != "OPTIONS":
+        METRICAS_BUFFER.append({
+            "endpoint": request.url.path,
+            "metodo": request.method,
+            "status_code": response.status_code,
+            "tiempo_ms": round(duracion, 2)
+        })
+        if len(METRICAS_BUFFER) >= 20:
+            flush_metricas()
+    return response
 
 # --- Modelos ---
 class Zona(BaseModel):
