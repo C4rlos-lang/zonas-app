@@ -1,15 +1,14 @@
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from supabase import create_client
 from dotenv import load_dotenv
-from starlette.middleware.base import BaseHTTPMiddleware
 import os
 import secrets
 import requests as http_requests
 import hashlib
 import time
-
 
 load_dotenv()
 
@@ -20,14 +19,11 @@ app = FastAPI(
 )
 
 app.add_middleware(
-    MetricasMiddleware,
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
 
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 ADMIN_KEY = os.getenv("API_KEY")
@@ -40,34 +36,7 @@ CACHE_CARGADO = False
 API_KEYS_CACHE = {}
 CACHE_KEYS_TIME = 0
 CONSUMO_BUFFER = []
-
 METRICAS_BUFFER = []
-
-def flush_metricas():
-    global METRICAS_BUFFER
-    if not METRICAS_BUFFER:
-        return
-    try:
-        supabase.table("gz_metricas").insert(METRICAS_BUFFER).execute()
-    except Exception:
-        pass
-    METRICAS_BUFFER = []
-
-class MetricasMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        global METRICAS_BUFFER
-        inicio = time.time()
-        response = await call_next(request)
-        duracion = (time.time() - inicio) * 1000
-        METRICAS_BUFFER.append({
-            "endpoint": request.url.path,
-            "metodo": request.method,
-            "status_code": response.status_code,
-            "tiempo_ms": round(duracion, 2)
-        })
-        if len(METRICAS_BUFFER) >= 20:
-            flush_metricas()
-        return response
 
 def cargar_cache():
     global ZONAS_CACHE, CACHE_CARGADO
@@ -99,10 +68,43 @@ def flush_consumo():
         pass
     CONSUMO_BUFFER = []
 
+def flush_metricas():
+    global METRICAS_BUFFER
+    if not METRICAS_BUFFER:
+        return
+    try:
+        supabase.table("gz_metricas").insert(METRICAS_BUFFER).execute()
+    except Exception:
+        pass
+    METRICAS_BUFFER = []
+
+# --- Middleware de metricas ---
+class MetricasMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        global METRICAS_BUFFER
+        inicio = time.time()
+        response = await call_next(request)
+        duracion = (time.time() - inicio) * 1000
+        if request.method != "OPTIONS":
+            METRICAS_BUFFER.append({
+                "endpoint": request.url.path,
+                "metodo": request.method,
+                "status_code": response.status_code,
+                "tiempo_ms": round(duracion, 2)
+            })
+            if len(METRICAS_BUFFER) >= 20:
+                flush_metricas()
+        return response
+
+app.add_middleware(MetricasMiddleware)
+
 # --- Modelos ---
 class Zona(BaseModel):
     nombre: str
     coordenadas: list
+
+class ZonaEditar(BaseModel):
+    nombre: str
 
 class Punto(BaseModel):
     lat: float
@@ -124,18 +126,15 @@ class ClienteLogin(BaseModel):
 class RecuperarPassword(BaseModel):
     email: str
 
+class CambiarPassword(BaseModel):
+    access_token: str
+    new_password: str
+
 class ApiKeyCrear(BaseModel):
     nombre: str = "default"
 
 class CrearTransaccion(BaseModel):
     plan: str
-
-class CambiarPassword(BaseModel):
-    access_token: str
-    new_password: str
-
-class ZonaEditar(BaseModel):
-    nombre: str
 
 # --- Utilidades ---
 def punto_en_poligono(punto, poligono):
@@ -184,44 +183,6 @@ def obtener_usuario(authorization):
     except Exception:
         raise HTTPException(status_code=401, detail="Token invalido")
 
-@app.get("/admin/metricas", tags=["Admin"], include_in_schema=False)
-def ver_metricas(x_api_key: str = Header(None)):
-    verificar_admin(x_api_key)
-    flush_metricas()
-    res = supabase.table("gz_metricas").select("*").order("created_at", desc=True).limit(1000).execute()
-    datos = res.data
-    if not datos:
-        return {"total": 0, "promedio_ms": 0, "errores": 0, "endpoints": {}}
-    total = len(datos)
-    promedio = sum([d["tiempo_ms"] for d in datos]) / total
-    errores = len([d for d in datos if d["status_code"] >= 400])
-    endpoints = {}
-    for d in datos:
-        ep = d["metodo"] + " " + d["endpoint"]
-        if ep not in endpoints:
-            endpoints[ep] = {"total": 0, "tiempos": [], "errores": 0}
-        endpoints[ep]["total"] += 1
-        endpoints[ep]["tiempos"].append(d["tiempo_ms"])
-        if d["status_code"] >= 400:
-            endpoints[ep]["errores"] += 1
-    resumen = {}
-    for ep in endpoints:
-        t = endpoints[ep]["tiempos"]
-        resumen[ep] = {
-            "total": endpoints[ep]["total"],
-            "promedio_ms": round(sum(t) / len(t), 1),
-            "min_ms": round(min(t), 1),
-            "max_ms": round(max(t), 1),
-            "errores": endpoints[ep]["errores"]
-        }
-    return {
-        "total_peticiones": total,
-        "promedio_ms": round(promedio, 1),
-        "tasa_error": round(errores / total * 100, 2),
-        "errores": errores,
-        "endpoints": resumen
-    }
-
 # --- Endpoints de ZONAS (admin) ---
 @app.post("/zonas", tags=["Zonas - Admin"])
 def crear_zona(zona: Zona, x_api_key: str = Header(None)):
@@ -238,20 +199,19 @@ def listar_zonas():
     res = supabase.table("zonas").select("*").execute()
     return res.data
 
-@app.delete("/zonas/{id}", tags=["Zonas - Admin"])
-def eliminar_zona(id: str, x_api_key: str = Header(None)):
-    verificar_admin(x_api_key)
-    supabase.table("zonas").delete().eq("id", id).execute()
-    invalidar_cache()
-    return {"mensaje": "Zona eliminada"}
-
-
 @app.put("/zonas/{id}", tags=["Zonas - Admin"])
 def editar_zona(id: str, zona: ZonaEditar, x_api_key: str = Header(None)):
     verificar_admin(x_api_key)
     supabase.table("zonas").update({"nombre": zona.nombre}).eq("id", id).execute()
     invalidar_cache()
     return {"mensaje": "Zona actualizada"}
+
+@app.delete("/zonas/{id}", tags=["Zonas - Admin"])
+def eliminar_zona(id: str, x_api_key: str = Header(None)):
+    verificar_admin(x_api_key)
+    supabase.table("zonas").delete().eq("id", id).execute()
+    invalidar_cache()
+    return {"mensaje": "Zona eliminada"}
 
 # --- Endpoint de VERIFICACION (clientes) ---
 @app.post("/zonas/verificar", tags=["Verificacion"])
@@ -370,6 +330,17 @@ def recuperar_password(datos: RecuperarPassword):
         return {"mensaje": "Si el correo existe, recibiras un enlace para restablecer tu contrasena"}
     except Exception as e:
         return {"mensaje": "Si el correo existe, recibiras un enlace para restablecer tu contrasena"}
+
+@app.post("/auth/cambiar-password", tags=["Autenticacion"], include_in_schema=False)
+def cambiar_password(datos: CambiarPassword):
+    try:
+        from supabase import create_client as sc
+        admin_client = sc(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
+        user = supabase.auth.get_user(datos.access_token)
+        admin_client.auth.admin.update_user_by_id(user.user.id, {"password": datos.new_password})
+        return {"mensaje": "Contrasena actualizada exitosamente"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 # --- Endpoints de API KEYS (clientes autenticados) ---
 @app.post("/mis-keys", tags=["API Keys"])
@@ -543,18 +514,47 @@ def toggle_cliente(id: str, x_api_key: str = Header(None)):
     supabase.table("gz_clientes").update({"activo": nuevo_estado}).eq("id", id).execute()
     return {"activo": nuevo_estado}
 
-# --- Evento de cierre: flush consumo pendiente ---
+# --- Endpoint de METRICAS (admin) ---
+@app.get("/admin/metricas", tags=["Admin"], include_in_schema=False)
+def ver_metricas(x_api_key: str = Header(None)):
+    verificar_admin(x_api_key)
+    flush_metricas()
+    res = supabase.table("gz_metricas").select("*").order("created_at", desc=True).limit(1000).execute()
+    datos = res.data
+    if not datos:
+        return {"total_peticiones": 0, "promedio_ms": 0, "tasa_error": 0, "errores": 0, "endpoints": {}}
+    total = len(datos)
+    promedio = sum([d["tiempo_ms"] for d in datos]) / total
+    errores = len([d for d in datos if d["status_code"] >= 400])
+    endpoints = {}
+    for d in datos:
+        ep = d["metodo"] + " " + d["endpoint"]
+        if ep not in endpoints:
+            endpoints[ep] = {"total": 0, "tiempos": [], "errores": 0}
+        endpoints[ep]["total"] += 1
+        endpoints[ep]["tiempos"].append(d["tiempo_ms"])
+        if d["status_code"] >= 400:
+            endpoints[ep]["errores"] += 1
+    resumen = {}
+    for ep in endpoints:
+        t = endpoints[ep]["tiempos"]
+        resumen[ep] = {
+            "total": endpoints[ep]["total"],
+            "promedio_ms": round(sum(t) / len(t), 1),
+            "min_ms": round(min(t), 1),
+            "max_ms": round(max(t), 1),
+            "errores": endpoints[ep]["errores"]
+        }
+    return {
+        "total_peticiones": total,
+        "promedio_ms": round(promedio, 1),
+        "tasa_error": round(errores / total * 100, 2),
+        "errores": errores,
+        "endpoints": resumen
+    }
+
+# --- Evento de cierre ---
 @app.on_event("shutdown")
 def shutdown_event():
     flush_consumo()
-
-@app.post("/auth/cambiar-password", tags=["Autenticacion"], include_in_schema=False)
-def cambiar_password(datos: CambiarPassword):
-    try:
-        from supabase import create_client as sc
-        admin_client = sc(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
-        user = supabase.auth.get_user(datos.access_token)
-        admin_client.auth.admin.update_user_by_id(user.user.id, {"password": datos.new_password})
-        return {"mensaje": "Contrasena actualizada exitosamente"}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    flush_metricas()
