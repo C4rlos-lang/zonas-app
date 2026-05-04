@@ -17,13 +17,6 @@ app = FastAPI(
     version="1.0.0"
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 ADMIN_KEY = os.getenv("API_KEY")
 WOMPI_PUBLIC_KEY = os.getenv("WOMPI_PUBLIC_KEY")
@@ -42,7 +35,7 @@ def cargar_cache():
     res = supabase.table("zonas").select("*").execute()
     ZONAS_CACHE = res.data
     CACHE_CARGADO = True
-    print(f"CACHE: {len(ZONAS_CACHE)} zonas cargadas en memoria")
+    print("CACHE: " + str(len(ZONAS_CACHE)) + " zonas cargadas en memoria")
 
 def invalidar_cache():
     global CACHE_CARGADO
@@ -55,7 +48,7 @@ def cargar_keys_cache():
     for k in res.data:
         API_KEYS_CACHE[k["api_key"]] = k
     CACHE_KEYS_TIME = time.time()
-    print(f"CACHE: {len(API_KEYS_CACHE)} API keys cargadas")
+    print("CACHE: " + str(len(API_KEYS_CACHE)) + " API keys cargadas")
 
 def flush_consumo():
     global CONSUMO_BUFFER
@@ -72,27 +65,46 @@ def flush_metricas():
     if not METRICAS_BUFFER:
         return
     try:
-        supabase.table("gz_metricas").insert(METRICAS_BUFFER).execute()
-    except Exception:
-        pass
-    METRICAS_BUFFER = []
+        buffer_copy = list(METRICAS_BUFFER)
+        METRICAS_BUFFER = []
+        supabase.table("gz_metricas").insert(buffer_copy).execute()
+    except Exception as e:
+        print("ERROR flush metricas: " + str(e))
 
+# --- Middleware CORS ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Middleware de metricas ---
 @app.middleware("http")
 async def metricas_middleware(request: Request, call_next):
     global METRICAS_BUFFER
     inicio = time.time()
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        response = None
     duracion = (time.time() - inicio) * 1000
-    if request.method != "OPTIONS":
+    status = response.status_code if response else 500
+    metodo = request.method
+    endpoint = request.url.path
+    if metodo != "OPTIONS":
         METRICAS_BUFFER.append({
-            "endpoint": request.url.path,
-            "metodo": request.method,
-            "status_code": response.status_code,
+            "endpoint": endpoint,
+            "metodo": metodo,
+            "status_code": status,
             "tiempo_ms": round(duracion, 2)
         })
-        if len(METRICAS_BUFFER) >= 20:
+        if len(METRICAS_BUFFER) >= 10:
             flush_metricas()
-    return response
+    if response:
+        return response
+    from starlette.responses import JSONResponse
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 # --- Modelos ---
 class Zona(BaseModel):
@@ -426,7 +438,7 @@ def crear_pago(datos: CrearTransaccion, authorization: str = Header(None)):
     precio_centavos = plan.data[0]["precio"] * 100
     referencia = "gz" + secrets.token_hex(12)
     integrity_secret = os.getenv("WOMPI_INTEGRITY_SECRET", "")
-    integrity_str = f"{referencia}{precio_centavos}COP{integrity_secret}"
+    integrity_str = referencia + str(precio_centavos) + "COP" + integrity_secret
     integrity_hash = hashlib.sha256(integrity_str.encode('utf-8')).hexdigest()
     return {
         "public_key": WOMPI_PUBLIC_KEY,
