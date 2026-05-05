@@ -17,6 +17,13 @@ app = FastAPI(
     version="1.0.0"
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 ADMIN_KEY = os.getenv("API_KEY")
 WOMPI_PUBLIC_KEY = os.getenv("WOMPI_PUBLIC_KEY")
@@ -71,40 +78,17 @@ def flush_metricas():
     except Exception as e:
         print("ERROR flush metricas: " + str(e))
 
-# --- Middleware CORS ---
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# --- Middleware de metricas ---
-@app.middleware("http")
-async def metricas_middleware(request: Request, call_next):
+def registrar_metrica(endpoint, metodo, status_code, inicio):
     global METRICAS_BUFFER
-    inicio = time.time()
-    try:
-        response = await call_next(request)
-    except Exception:
-        response = None
     duracion = (time.time() - inicio) * 1000
-    status = response.status_code if response else 500
-    metodo = request.method
-    endpoint = request.url.path
-    if metodo != "OPTIONS":
-        METRICAS_BUFFER.append({
-            "endpoint": endpoint,
-            "metodo": metodo,
-            "status_code": status,
-            "tiempo_ms": round(duracion, 2)
-        })
-        if len(METRICAS_BUFFER) >= 10:
-            flush_metricas()
-    if response:
-        return response
-    from starlette.responses import JSONResponse
-    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+    METRICAS_BUFFER.append({
+        "endpoint": endpoint,
+        "metodo": metodo,
+        "status_code": status_code,
+        "tiempo_ms": round(duracion, 2)
+    })
+    if len(METRICAS_BUFFER) >= 10:
+        flush_metricas()
 
 # --- Modelos ---
 class Zona(BaseModel):
@@ -194,36 +178,45 @@ def obtener_usuario(authorization):
 # --- Endpoints de ZONAS (admin) ---
 @app.post("/zonas", tags=["Zonas - Admin"])
 def crear_zona(zona: Zona, x_api_key: str = Header(None)):
+    t = time.time()
     verificar_admin(x_api_key)
     res = supabase.table("zonas").insert({
         "nombre": zona.nombre,
         "coordenadas": zona.coordenadas
     }).execute()
     invalidar_cache()
+    registrar_metrica("/zonas", "POST", 200, t)
     return res.data[0]
 
 @app.get("/zonas", tags=["Zonas - Admin"])
 def listar_zonas():
+    t = time.time()
     res = supabase.table("zonas").select("*").execute()
+    registrar_metrica("/zonas", "GET", 200, t)
     return res.data
 
 @app.put("/zonas/{id}", tags=["Zonas - Admin"])
 def editar_zona(id: str, zona: ZonaEditar, x_api_key: str = Header(None)):
+    t = time.time()
     verificar_admin(x_api_key)
     supabase.table("zonas").update({"nombre": zona.nombre}).eq("id", id).execute()
     invalidar_cache()
+    registrar_metrica("/zonas/" + id, "PUT", 200, t)
     return {"mensaje": "Zona actualizada"}
 
 @app.delete("/zonas/{id}", tags=["Zonas - Admin"])
 def eliminar_zona(id: str, x_api_key: str = Header(None)):
+    t = time.time()
     verificar_admin(x_api_key)
     supabase.table("zonas").delete().eq("id", id).execute()
     invalidar_cache()
+    registrar_metrica("/zonas/" + id, "DELETE", 200, t)
     return {"mensaje": "Zona eliminada"}
 
 # --- Endpoint de VERIFICACION (clientes) ---
 @app.post("/zonas/verificar", tags=["Verificacion"])
 def verificar_punto(punto: Punto, x_api_key: str = Header(None)):
+    t = time.time()
     global CONSUMO_BUFFER
     key_data = verificar_cliente_key(x_api_key)
     if not key_data.get("es_admin"):
@@ -241,12 +234,15 @@ def verificar_punto(punto: Punto, x_api_key: str = Header(None)):
         if punto_en_poligono([punto.lat, punto.lon], coords):
             encontradas.append({"id": zona["id"], "nombre": zona["nombre"]})
     if not encontradas:
+        registrar_metrica("/zonas/verificar", "POST", 200, t)
         return {"zona": None, "mensaje": "El punto no pertenece a ninguna zona"}
+    registrar_metrica("/zonas/verificar", "POST", 200, t)
     return {"zona": encontradas[0]["nombre"], "todas": encontradas}
 
 # --- Endpoint de VERIFICACION MASIVA (clientes) ---
 @app.post("/zonas/verificar-masivo", tags=["Verificacion"])
 def verificar_masivo(datos: PuntosMasivos, x_api_key: str = Header(None)):
+    t = time.time()
     global CONSUMO_BUFFER
     key_data = verificar_cliente_key(x_api_key)
     if not CACHE_CARGADO:
@@ -271,11 +267,13 @@ def verificar_masivo(datos: PuntosMasivos, x_api_key: str = Header(None)):
         })
         if len(CONSUMO_BUFFER) >= 50:
             flush_consumo()
+    registrar_metrica("/zonas/verificar-masivo", "POST", 200, t)
     return {"total": len(resultados), "resultados": resultados}
 
 # --- Endpoints de REGISTRO/LOGIN (clientes) ---
 @app.post("/auth/registro", tags=["Autenticacion"])
 def registro_cliente(datos: ClienteRegistro):
+    t = time.time()
     try:
         auth_res = supabase.auth.sign_up({
             "email": datos.email,
@@ -299,16 +297,19 @@ def registro_cliente(datos: ClienteRegistro):
         }).execute()
         invalidar_cache()
         cargar_keys_cache()
+        registrar_metrica("/auth/registro", "POST", 200, t)
         return {
             "mensaje": "Registro exitoso",
             "cliente": cliente.data[0],
             "api_key": primera_key
         }
     except Exception as e:
+        registrar_metrica("/auth/registro", "POST", 400, t)
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/auth/login", tags=["Autenticacion"])
 def login_cliente(datos: ClienteLogin):
+    t = time.time()
     try:
         auth_res = supabase.auth.sign_in_with_password({
             "email": datos.email,
@@ -321,38 +322,47 @@ def login_cliente(datos: ClienteLogin):
         if not cliente.data:
             raise HTTPException(status_code=404, detail="Cliente no encontrado")
         keys = supabase.table("gz_api_keys").select("*").eq("cliente_id", cliente.data[0]["id"]).execute()
+        registrar_metrica("/auth/login", "POST", 200, t)
         return {
             "cliente": cliente.data[0],
             "api_keys": keys.data,
             "token": auth_res.session.access_token
         }
     except Exception as e:
+        registrar_metrica("/auth/login", "POST", 401, t)
         raise HTTPException(status_code=401, detail=str(e))
 
 @app.post("/auth/recuperar", tags=["Autenticacion"])
 def recuperar_password(datos: RecuperarPassword):
+    t = time.time()
     try:
         supabase.auth.reset_password_email(datos.email, {
             "redirect_to": "https://zonas-frontend.vercel.app/#/portal/reset"
         })
+        registrar_metrica("/auth/recuperar", "POST", 200, t)
         return {"mensaje": "Si el correo existe, recibiras un enlace para restablecer tu contrasena"}
     except Exception as e:
+        registrar_metrica("/auth/recuperar", "POST", 200, t)
         return {"mensaje": "Si el correo existe, recibiras un enlace para restablecer tu contrasena"}
 
 @app.post("/auth/cambiar-password", tags=["Autenticacion"], include_in_schema=False)
 def cambiar_password(datos: CambiarPassword):
+    t = time.time()
     try:
         from supabase import create_client as sc
         admin_client = sc(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_KEY"))
         user = supabase.auth.get_user(datos.access_token)
         admin_client.auth.admin.update_user_by_id(user.user.id, {"password": datos.new_password})
+        registrar_metrica("/auth/cambiar-password", "POST", 200, t)
         return {"mensaje": "Contrasena actualizada exitosamente"}
     except Exception as e:
+        registrar_metrica("/auth/cambiar-password", "POST", 400, t)
         raise HTTPException(status_code=400, detail=str(e))
 
 # --- Endpoints de API KEYS (clientes autenticados) ---
 @app.post("/mis-keys", tags=["API Keys"])
 def crear_api_key(datos: ApiKeyCrear, authorization: str = Header(None)):
+    t = time.time()
     user = obtener_usuario(authorization)
     cliente = supabase.table("gz_clientes").select("*").eq("user_id", user.id).execute()
     if not cliente.data:
@@ -372,30 +382,36 @@ def crear_api_key(datos: ApiKeyCrear, authorization: str = Header(None)):
         "nombre": datos.nombre
     }).execute()
     cargar_keys_cache()
+    registrar_metrica("/mis-keys", "POST", 200, t)
     return res.data[0]
 
 @app.get("/mis-keys", tags=["API Keys"])
 def listar_mis_keys(authorization: str = Header(None)):
+    t = time.time()
     user = obtener_usuario(authorization)
     cliente = supabase.table("gz_clientes").select("*").eq("user_id", user.id).execute()
     if not cliente.data:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
     keys = supabase.table("gz_api_keys").select("*").eq("cliente_id", cliente.data[0]["id"]).execute()
+    registrar_metrica("/mis-keys", "GET", 200, t)
     return keys.data
 
 @app.delete("/mis-keys/{id}", tags=["API Keys"])
 def revocar_api_key(id: str, authorization: str = Header(None)):
+    t = time.time()
     user = obtener_usuario(authorization)
     cliente = supabase.table("gz_clientes").select("*").eq("user_id", user.id).execute()
     if not cliente.data:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
     supabase.table("gz_api_keys").delete().eq("id", id).eq("cliente_id", cliente.data[0]["id"]).execute()
     cargar_keys_cache()
+    registrar_metrica("/mis-keys/" + id, "DELETE", 200, t)
     return {"mensaje": "API Key revocada"}
 
 # --- Endpoint de CONSUMO (clientes) ---
 @app.get("/mi-consumo", tags=["Consumo"])
 def ver_consumo(authorization: str = Header(None)):
+    t = time.time()
     user = obtener_usuario(authorization)
     cliente = supabase.table("gz_clientes").select("*").eq("user_id", user.id).execute()
     if not cliente.data:
@@ -403,19 +419,23 @@ def ver_consumo(authorization: str = Header(None)):
     keys = supabase.table("gz_api_keys").select("id").eq("cliente_id", cliente.data[0]["id"]).execute()
     key_ids = [k["id"] for k in keys.data]
     if not key_ids:
+        registrar_metrica("/mi-consumo", "GET", 200, t)
         return {"total": 0, "detalle": []}
     logs = supabase.table("gz_consumo_log").select("*").in_("api_key_id", key_ids).execute()
+    registrar_metrica("/mi-consumo", "GET", 200, t)
     return {"total": len(logs.data), "detalle": logs.data}
 
 # --- Endpoint de MI PLAN (clientes) ---
 @app.get("/mi-plan", tags=["Plan"])
 def ver_plan(authorization: str = Header(None)):
+    t = time.time()
     user = obtener_usuario(authorization)
     cliente = supabase.table("gz_clientes").select("*").eq("user_id", user.id).execute()
     if not cliente.data:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
     c = cliente.data[0]
     plan_info = supabase.table("gz_planes").select("*").eq("nombre", c.get("plan", "starter")).execute()
+    registrar_metrica("/mi-plan", "GET", 200, t)
     return {
         "plan": c.get("plan", "starter"),
         "consultas_restantes": c.get("consultas_restantes", 0),
@@ -426,6 +446,7 @@ def ver_plan(authorization: str = Header(None)):
 # --- Endpoints de PAGO con Wompi ---
 @app.post("/pagos/crear", tags=["Pagos"], include_in_schema=False)
 def crear_pago(datos: CrearTransaccion, authorization: str = Header(None)):
+    t = time.time()
     user = obtener_usuario(authorization)
     cliente = supabase.table("gz_clientes").select("*").eq("user_id", user.id).execute()
     if not cliente.data:
@@ -440,6 +461,7 @@ def crear_pago(datos: CrearTransaccion, authorization: str = Header(None)):
     integrity_secret = os.getenv("WOMPI_INTEGRITY_SECRET", "")
     integrity_str = referencia + str(precio_centavos) + "COP" + integrity_secret
     integrity_hash = hashlib.sha256(integrity_str.encode('utf-8')).hexdigest()
+    registrar_metrica("/pagos/crear", "POST", 200, t)
     return {
         "public_key": WOMPI_PUBLIC_KEY,
         "monto": precio_centavos,
@@ -453,6 +475,7 @@ def crear_pago(datos: CrearTransaccion, authorization: str = Header(None)):
 
 @app.post("/pagos/webhook", tags=["Pagos"], include_in_schema=False)
 async def webhook_wompi(request: Request):
+    t = time.time()
     body = await request.json()
     try:
         evento = body.get("event", "")
@@ -471,12 +494,15 @@ async def webhook_wompi(request: Request):
                             "plan": plan_nombre,
                             "consultas_restantes": plan.data[0]["consultas_mes"]
                         }).eq("id", cliente_id).execute()
+        registrar_metrica("/pagos/webhook", "POST", 200, t)
         return {"ok": True}
     except Exception as e:
+        registrar_metrica("/pagos/webhook", "POST", 500, t)
         return {"ok": False, "error": str(e)}
 
 @app.get("/pagos/verificar/{referencia}", tags=["Pagos"], include_in_schema=False)
 def verificar_pago(referencia: str, authorization: str = Header(None)):
+    t = time.time()
     user = obtener_usuario(authorization)
     try:
         url = "https://production.wompi.co/v1/transactions?reference=" + referencia
@@ -496,30 +522,38 @@ def verificar_pago(referencia: str, authorization: str = Header(None)):
                             "plan": plan_nombre,
                             "consultas_restantes": plan.data[0]["consultas_mes"]
                         }).eq("id", cliente.data[0]["id"]).execute()
+                    registrar_metrica("/pagos/verificar", "GET", 200, t)
                     return {
                         "estado": "APPROVED",
                         "plan": plan_nombre
                     }
+            registrar_metrica("/pagos/verificar", "GET", 200, t)
             return {"estado": estado}
+        registrar_metrica("/pagos/verificar", "GET", 404, t)
         return {"estado": "NOT_FOUND"}
     except Exception as e:
+        registrar_metrica("/pagos/verificar", "GET", 500, t)
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- Endpoints ADMIN (gestion de clientes) ---
 @app.get("/admin/clientes", tags=["Admin"], include_in_schema=False)
 def listar_clientes(x_api_key: str = Header(None)):
+    t = time.time()
     verificar_admin(x_api_key)
     res = supabase.table("gz_clientes").select("*").execute()
+    registrar_metrica("/admin/clientes", "GET", 200, t)
     return res.data
 
 @app.put("/admin/clientes/{id}/toggle", tags=["Admin"], include_in_schema=False)
 def toggle_cliente(id: str, x_api_key: str = Header(None)):
+    t = time.time()
     verificar_admin(x_api_key)
     cliente = supabase.table("gz_clientes").select("*").eq("id", id).execute()
     if not cliente.data:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
     nuevo_estado = not cliente.data[0]["activo"]
     supabase.table("gz_clientes").update({"activo": nuevo_estado}).eq("id", id).execute()
+    registrar_metrica("/admin/clientes/" + id + "/toggle", "PUT", 200, t)
     return {"activo": nuevo_estado}
 
 # --- Endpoint de METRICAS (admin) ---
