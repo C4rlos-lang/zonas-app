@@ -8,6 +8,7 @@ import secrets
 import requests as http_requests
 import hashlib
 import time
+import threading
 
 load_dotenv()
 
@@ -28,6 +29,7 @@ supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 ADMIN_KEY = os.getenv("API_KEY")
 WOMPI_PUBLIC_KEY = os.getenv("WOMPI_PUBLIC_KEY")
 WOMPI_PRIVATE_KEY = os.getenv("WOMPI_PRIVATE_KEY")
+RAILWAY_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
 
 # --- Cache en memoria ---
 ZONAS_CACHE = []
@@ -89,6 +91,32 @@ def registrar_metrica(endpoint, metodo, status_code, inicio):
     })
     if len(METRICAS_BUFFER) >= 10:
         flush_metricas()
+
+# --- Keep-alive: hilo que hace ping cada 4 minutos ---
+def keep_alive_loop():
+    time.sleep(30)  # espera inicial para que el servidor arranque
+    while True:
+        try:
+            url = "https://" + RAILWAY_URL + "/health"
+            http_requests.get(url, timeout=10)
+            print("KEEP-ALIVE: ping OK -> " + url)
+        except Exception as e:
+            print("KEEP-ALIVE: fallo -> " + str(e))
+        time.sleep(240)  # 4 minutos
+
+# --- Startup: precalentar cache y arrancar keep-alive ---
+@app.on_event("startup")
+def startup_event():
+    print("STARTUP: precalentando cache...")
+    cargar_cache()
+    cargar_keys_cache()
+    print("STARTUP: cache listo")
+    if RAILWAY_URL:
+        t = threading.Thread(target=keep_alive_loop, daemon=True)
+        t.start()
+        print("KEEP-ALIVE: hilo iniciado para " + RAILWAY_URL)
+    else:
+        print("KEEP-ALIVE: RAILWAY_PUBLIC_DOMAIN no definido, keep-alive desactivado")
 
 # --- Modelos ---
 class Zona(BaseModel):
@@ -174,6 +202,16 @@ def obtener_usuario(authorization):
         return user_res.user
     except Exception:
         raise HTTPException(status_code=401, detail="Token invalido")
+
+# --- Health check (usado por keep-alive) ---
+@app.get("/health", tags=["Sistema"], include_in_schema=False)
+def health():
+    return {
+        "status": "ok",
+        "zonas_en_cache": len(ZONAS_CACHE),
+        "keys_en_cache": len(API_KEYS_CACHE),
+        "metricas_en_buffer": len(METRICAS_BUFFER)
+    }
 
 # --- Endpoints de ZONAS (admin) ---
 @app.post("/zonas", tags=["Zonas - Admin"])
