@@ -38,6 +38,9 @@ API_KEYS_CACHE = {}
 CACHE_KEYS_TIME = 0
 CONSUMO_BUFFER = []
 METRICAS_BUFFER = []
+# Cache de clientes
+CLIENTES_CACHE = []
+CLIENTES_CACHE_TIME = 0
 
 def cargar_cache():
     global ZONAS_CACHE, CACHE_CARGADO
@@ -58,6 +61,13 @@ def cargar_keys_cache():
         API_KEYS_CACHE[k["api_key"]] = k
     CACHE_KEYS_TIME = time.time()
     print("CACHE: " + str(len(API_KEYS_CACHE)) + " API keys cargadas")
+
+def cargar_clientes_cache():
+    global CLIENTES_CACHE, CLIENTES_CACHE_TIME
+    res = supabase.table("gz_clientes").select("*").execute()
+    CLIENTES_CACHE = res.data
+    CLIENTES_CACHE_TIME = time.time()
+    print("CACHE: " + str(len(CLIENTES_CACHE)) + " clientes cargados en memoria")
 
 def flush_consumo():
     global CONSUMO_BUFFER
@@ -110,6 +120,7 @@ def startup_event():
     print("STARTUP: precalentando cache...")
     cargar_cache()
     cargar_keys_cache()
+    cargar_clientes_cache() 
     print("STARTUP: cache listo")
     if RAILWAY_URL:
         t = threading.Thread(target=keep_alive_loop, daemon=True)
@@ -575,9 +586,10 @@ def verificar_pago(referencia: str, authorization: str = Header(None)):
 def listar_clientes(x_api_key: str = Header(None)):
     t = time.time()
     verificar_admin(x_api_key)
-    res = supabase.table("gz_clientes").select("*").execute()
+    if not CLIENTES_CACHE or (time.time() - CLIENTES_CACHE_TIME) > 300:
+        cargar_clientes_cache()
     registrar_metrica("/admin/clientes", "GET", 200, t)
-    return res.data
+    return CLIENTES_CACHE
 
 @app.put("/admin/clientes/{id}/toggle", tags=["Admin"], include_in_schema=False)
 def toggle_cliente(id: str, x_api_key: str = Header(None)):
@@ -588,6 +600,7 @@ def toggle_cliente(id: str, x_api_key: str = Header(None)):
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
     nuevo_estado = not cliente.data[0]["activo"]
     supabase.table("gz_clientes").update({"activo": nuevo_estado}).eq("id", id).execute()
+    cargar_clientes_cache()
     registrar_metrica("/admin/clientes/" + id + "/toggle", "PUT", 200, t)
     return {"activo": nuevo_estado}
 
