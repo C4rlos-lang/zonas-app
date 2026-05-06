@@ -595,21 +595,6 @@ def ver_metricas(x_api_key: str = Header(None)):
         "endpoints": resumen
     }
 
-@app.get("/admin/test-metricas", include_in_schema=False)
-def test_metricas(x_api_key: str = Header(None)):
-    verificar_admin(x_api_key)
-    # Test directo a Supabase
-    try:
-        resultado = supabase.table("gz_metricas").insert({
-            "endpoint": "/test",
-            "metodo": "GET",
-            "status_code": 200,
-            "tiempo_ms": 1.0
-        }).execute()
-        return {"insert_ok": True, "data": resultado.data, "buffer_actual": len(METRICAS_BUFFER)}
-    except Exception as e:
-        return {"insert_ok": False, "error": str(e), "buffer_actual": len(METRICAS_BUFFER)}
-
 # --- Evento de cierre ---
 @app.on_event("shutdown")
 def shutdown_event():
