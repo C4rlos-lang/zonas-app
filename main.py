@@ -38,7 +38,6 @@ API_KEYS_CACHE = {}
 CACHE_KEYS_TIME = 0
 CONSUMO_BUFFER = []
 METRICAS_BUFFER = []
-# Cache de clientes
 CLIENTES_CACHE = []
 CLIENTES_CACHE_TIME = 0
 
@@ -102,9 +101,9 @@ def registrar_metrica(endpoint, metodo, status_code, inicio):
     if len(METRICAS_BUFFER) >= 10:
         flush_metricas()
 
-# --- Keep-alive: hilo que hace ping cada 4 minutos ---
+# --- Keep-alive ---
 def keep_alive_loop():
-    time.sleep(30)  # espera inicial para que el servidor arranque
+    time.sleep(30)
     while True:
         try:
             url = "https://" + RAILWAY_URL + "/health"
@@ -112,15 +111,15 @@ def keep_alive_loop():
             print("KEEP-ALIVE: ping OK -> " + url)
         except Exception as e:
             print("KEEP-ALIVE: fallo -> " + str(e))
-        time.sleep(240)  # 4 minutos
+        time.sleep(240)
 
-# --- Startup: precalentar cache y arrancar keep-alive ---
+# --- Startup ---
 @app.on_event("startup")
 def startup_event():
     print("STARTUP: precalentando cache...")
     cargar_cache()
     cargar_keys_cache()
-    cargar_clientes_cache() 
+    cargar_clientes_cache()
     print("STARTUP: cache listo")
     if RAILWAY_URL:
         t = threading.Thread(target=keep_alive_loop, daemon=True)
@@ -214,7 +213,7 @@ def obtener_usuario(authorization):
     except Exception:
         raise HTTPException(status_code=401, detail="Token invalido")
 
-# --- Health check (usado por keep-alive) ---
+# --- Health check ---
 @app.get("/health", tags=["Sistema"], include_in_schema=False)
 def health():
     return {
@@ -225,7 +224,18 @@ def health():
     }
 
 # --- Endpoints de ZONAS (admin) ---
-# DESPUÉS - usa el cache
+@app.post("/zonas", tags=["Zonas - Admin"])
+def crear_zona(zona: Zona, x_api_key: str = Header(None)):
+    t = time.time()
+    verificar_admin(x_api_key)
+    res = supabase.table("zonas").insert({
+        "nombre": zona.nombre,
+        "coordenadas": zona.coordenadas
+    }).execute()
+    invalidar_cache()
+    registrar_metrica("/zonas", "POST", 200, t)
+    return res.data[0]
+
 @app.get("/zonas", tags=["Zonas - Admin"])
 def listar_zonas():
     t = time.time()
@@ -233,13 +243,6 @@ def listar_zonas():
         cargar_cache()
     registrar_metrica("/zonas", "GET", 200, t)
     return ZONAS_CACHE
-
-@app.get("/zonas", tags=["Zonas - Admin"])
-def listar_zonas():
-    t = time.time()
-    res = supabase.table("zonas").select("*").execute()
-    registrar_metrica("/zonas", "GET", 200, t)
-    return res.data
 
 @app.put("/zonas/{id}", tags=["Zonas - Admin"])
 def editar_zona(id: str, zona: ZonaEditar, x_api_key: str = Header(None)):
@@ -569,10 +572,7 @@ def verificar_pago(referencia: str, authorization: str = Header(None)):
                             "consultas_restantes": plan.data[0]["consultas_mes"]
                         }).eq("id", cliente.data[0]["id"]).execute()
                     registrar_metrica("/pagos/verificar", "GET", 200, t)
-                    return {
-                        "estado": "APPROVED",
-                        "plan": plan_nombre
-                    }
+                    return {"estado": "APPROVED", "plan": plan_nombre}
             registrar_metrica("/pagos/verificar", "GET", 200, t)
             return {"estado": estado}
         registrar_metrica("/pagos/verificar", "GET", 404, t)
@@ -581,7 +581,7 @@ def verificar_pago(referencia: str, authorization: str = Header(None)):
         registrar_metrica("/pagos/verificar", "GET", 500, t)
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- Endpoints ADMIN (gestion de clientes) ---
+# --- Endpoints ADMIN ---
 @app.get("/admin/clientes", tags=["Admin"], include_in_schema=False)
 def listar_clientes(x_api_key: str = Header(None)):
     t = time.time()
@@ -643,7 +643,7 @@ def ver_metricas(x_api_key: str = Header(None)):
         "endpoints": resumen
     }
 
-# --- Evento de cierre ---
+# --- Shutdown ---
 @app.on_event("shutdown")
 def shutdown_event():
     flush_consumo()
