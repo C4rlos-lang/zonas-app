@@ -214,17 +214,14 @@ def health():
     }
 
 # --- Endpoints de ZONAS (admin) ---
-@app.post("/zonas", tags=["Zonas - Admin"])
-def crear_zona(zona: Zona, x_api_key: str = Header(None)):
+# DESPUÉS - usa el cache
+@app.get("/zonas", tags=["Zonas - Admin"])
+def listar_zonas():
     t = time.time()
-    verificar_admin(x_api_key)
-    res = supabase.table("zonas").insert({
-        "nombre": zona.nombre,
-        "coordenadas": zona.coordenadas
-    }).execute()
-    invalidar_cache()
-    registrar_metrica("/zonas", "POST", 200, t)
-    return res.data[0]
+    if not CACHE_CARGADO:
+        cargar_cache()
+    registrar_metrica("/zonas", "GET", 200, t)
+    return ZONAS_CACHE
 
 @app.get("/zonas", tags=["Zonas - Admin"])
 def listar_zonas():
