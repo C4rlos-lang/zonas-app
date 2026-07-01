@@ -29,7 +29,7 @@ supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
 ADMIN_KEY = os.getenv("API_KEY")
 WOMPI_PUBLIC_KEY = os.getenv("WOMPI_PUBLIC_KEY")
 WOMPI_PRIVATE_KEY = os.getenv("WOMPI_PRIVATE_KEY")
-RAILWAY_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "")
 
 # --- Cache en memoria ---
 ZONAS_CACHE = []
@@ -101,12 +101,12 @@ def registrar_metrica(endpoint, metodo, status_code, inicio):
     if len(METRICAS_BUFFER) >= 10:
         flush_metricas()
 
-# --- Keep-alive ---
+# --- Keep-alive (Render) ---
 def keep_alive_loop():
     time.sleep(30)
     while True:
         try:
-            url = "https://" + RAILWAY_URL + "/health"
+            url = RENDER_URL.rstrip("/") + "/health"
             http_requests.get(url, timeout=10)
             print("KEEP-ALIVE: ping OK -> " + url)
         except Exception as e:
@@ -117,16 +117,20 @@ def keep_alive_loop():
 @app.on_event("startup")
 def startup_event():
     print("STARTUP: precalentando cache...")
-    cargar_cache()
-    cargar_keys_cache()
-    cargar_clientes_cache()
-    print("STARTUP: cache listo")
-    if RAILWAY_URL:
+    try:
+        cargar_cache()
+        cargar_keys_cache()
+        cargar_clientes_cache()
+        print("STARTUP: cache listo")
+    except Exception as e:
+        print(f"STARTUP WARNING: No se pudo cargar cache: {e}")
+        print("La app iniciara sin cache, se cargara en el primer request.")
+    if RENDER_URL:
         t = threading.Thread(target=keep_alive_loop, daemon=True)
         t.start()
-        print("KEEP-ALIVE: hilo iniciado para " + RAILWAY_URL)
+        print("KEEP-ALIVE: hilo iniciado para " + RENDER_URL)
     else:
-        print("KEEP-ALIVE: RAILWAY_PUBLIC_DOMAIN no definido, keep-alive desactivado")
+        print("KEEP-ALIVE: RENDER_EXTERNAL_URL no definido, keep-alive desactivado")
 
 # --- Modelos ---
 class Zona(BaseModel):
