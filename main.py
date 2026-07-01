@@ -227,6 +227,17 @@ def health():
         "metricas_en_buffer": len(METRICAS_BUFFER)
     }
 
+# --- Debug env (temporal) ---
+@app.get("/debug-env", include_in_schema=False)
+def debug_env():
+    url = os.getenv("SUPABASE_URL", "NO_ENCONTRADO")
+    return {
+        "supabase_url": url,
+        "longitud": len(url),
+        "primeros_10": url[:10],
+        "ultimos_10": url[-10:]
+    }
+
 # --- Endpoints de ZONAS (admin) ---
 @app.post("/zonas", tags=["Zonas - Admin"])
 def crear_zona(zona: Zona, x_api_key: str = Header(None)):
