@@ -9,6 +9,7 @@ import requests as http_requests
 import hashlib
 import time
 import threading
+from geocoder import geocodificar
 
 load_dotenv()
 
@@ -170,6 +171,10 @@ class ApiKeyCrear(BaseModel):
 class CrearTransaccion(BaseModel):
     plan: str
 
+class GeocodificarInput(BaseModel):
+    entrada: str
+    ciudad: str = None
+
 # --- Utilidades ---
 def punto_en_poligono(punto, poligono):
     lat, lon = punto
@@ -226,6 +231,15 @@ def health():
         "keys_en_cache": len(API_KEYS_CACHE),
         "metricas_en_buffer": len(METRICAS_BUFFER)
     }
+
+# --- Georreferenciacion ---
+@app.post("/geocodificar", tags=["Georreferenciacion"])
+def geocodificar_endpoint(datos: GeocodificarInput, x_api_key: str = Header(None)):
+    t = time.time()
+    verificar_cliente_key(x_api_key)
+    resultado = geocodificar(datos.entrada, ciudad=datos.ciudad, supabase=supabase)
+    registrar_metrica("/geocodificar", "POST", 200, t)
+    return resultado
 
 # --- Endpoints de ZONAS (admin) ---
 @app.post("/zonas", tags=["Zonas - Admin"])
